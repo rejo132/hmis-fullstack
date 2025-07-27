@@ -2,7 +2,6 @@ services:
   - type: pserv
     name: hmis-postgres
     env: postgres
-    startCommand: postgres
     plan: free
 
   - type: web
@@ -20,7 +19,7 @@ services:
         fromService:
           name: hmis-postgres
           type: pserv
-          property: externalDatabaseUrl
+          property: connectionString
       - key: JWT_SECRET_KEY
         generateValue: true
       - key: SECRET_KEY
