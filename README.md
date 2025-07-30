@@ -1,4 +1,4 @@
-# HMIS Fullstack Monorepo
+# HMIS Fullstack  
 
 A comprehensive Hospital Management Information System (HMIS) combining a Flask REST API backend and a modern React frontend. This monorepo is designed for easy development, deployment, and collaboration.
 
@@ -61,39 +61,7 @@ npm start
 - Backend: http://localhost:5000
 - Frontend: http://localhost:3000
 
----
 
-## 🐳 Deployment: Docker Compose (Recommended)
-
-Create a `docker-compose.yml` in the root:
-```yaml
-version: '3.8'
-services:
-  backend:
-    build: ./backend
-    ports:
-      - "5000:5000"
-    environment:
-      - FLASK_ENV=production
-      - DATABASE_URL=sqlite:///hmis.db
-    volumes:
-      - ./backend:/app
-  frontend:
-    build: ./frontend
-    ports:
-      - "3000:3000"
-    environment:
-      - NODE_ENV=production
-    volumes:
-      - ./frontend:/app
-```
-
-**To deploy:**
-```bash
-docker-compose up --build
-```
-
----
 
 ## 🩺 Backend (Flask API)
 
