@@ -61,11 +61,25 @@ export const submitClaim = createAsyncThunk(
   'billing/submitClaim',
   async ({ billId, insuranceProvider }, { rejectWithValue }) => {
     try {
+      console.log('SubmitClaim: Making API call with data:', { billId, insuranceProvider });
+      console.log('SubmitClaim: API base URL:', process.env.REACT_APP_API_URL || 'http://localhost:5000');
+      console.log('SubmitClaim: Token from localStorage:', localStorage.getItem('access_token'));
+      
       const response = await submitClaimAPI({ billId, insuranceProvider });
       console.log('Submit claim response:', response.data);
       return response.data;
     } catch (error) {
       console.error('Submit claim failed:', error.message);
+      console.error('Submit claim error details:', {
+        status: error.response?.status,
+        statusText: error.response?.statusText,
+        data: error.response?.data,
+        config: {
+          url: error.config?.url,
+          method: error.config?.method,
+          headers: error.config?.headers
+        }
+      });
       return rejectWithValue(error.response?.data?.message || error.message);
     }
   }

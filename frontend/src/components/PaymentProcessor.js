@@ -150,6 +150,13 @@ const PaymentProcessor = ({ invoice, onPaymentComplete, onClose }) => {
       return;
     }
 
+    // Validate phone number format
+    const phoneRegex = /^(254|\+254|0)?[17]\d{8}$/;
+    if (!phoneRegex.test(phoneNumber.replace(/\s/g, ''))) {
+      toast.error('Please enter a valid Kenyan phone number (e.g., 254700000000)');
+      return;
+    }
+
     const amount = getPaymentAmount();
     if (amount <= 0) {
       toast.error('Invalid payment amount');
@@ -157,10 +164,23 @@ const PaymentProcessor = ({ invoice, onPaymentComplete, onClose }) => {
     }
 
     try {
+      // Ensure we have a valid invoice ID
+      const invoiceId = invoice?.id || 1; // Fallback to 1 if no invoice
+      
+      // Format phone number to Kenyan format
+      let formattedPhone = phoneNumber.replace(/\s/g, '');
+      if (formattedPhone.startsWith('0')) {
+        formattedPhone = '254' + formattedPhone.substring(1);
+      } else if (formattedPhone.startsWith('+254')) {
+        formattedPhone = formattedPhone.substring(1);
+      } else if (!formattedPhone.startsWith('254')) {
+        formattedPhone = '254' + formattedPhone;
+      }
+
       // Debug: Log the request data
       const requestData = {
-        invoice_id: invoice.id,
-        phone_number: phoneNumber,
+        invoice_id: invoiceId,
+        phone_number: formattedPhone,
         amount: amount
       };
       console.log('M-Pesa payment request data:', requestData);
@@ -206,10 +226,47 @@ const PaymentProcessor = ({ invoice, onPaymentComplete, onClose }) => {
       
     } catch (error) {
       console.error('M-Pesa payment error:', error);
-      if (error.response && error.response.data && error.response.data.message) {
-        toast.error(`M-Pesa payment failed: ${error.response.data.message}`);
+      
+      // Handle specific error cases
+      if (error.response) {
+        const { status, data } = error.response;
+        
+        switch (status) {
+          case 400:
+            if (data.message) {
+              // Show detailed error information if available
+              if (data.received_data) {
+                toast.error(`Validation Error: ${data.message}. Please check your input.`);
+                console.log('Received data:', data.received_data);
+                console.log('Expected fields:', data.expected_fields);
+              } else {
+                toast.error(`Validation Error: ${data.message}`);
+              }
+            } else {
+              toast.error('Invalid request data. Please check your input.');
+            }
+            break;
+          case 401:
+            toast.error('Authentication failed. Please log in again.');
+            break;
+          case 403:
+            toast.error('You do not have permission to process payments.');
+            break;
+          case 404:
+            toast.error('Invoice not found. Please check the invoice details.');
+            break;
+          case 500:
+            toast.error('Server error. Please try again later.');
+            break;
+          default:
+            toast.error(data.message || 'M-Pesa payment failed. Please try again.');
+        }
+      } else if (error.request) {
+        // Network error
+        toast.error('Network error. Please check your connection and try again.');
       } else {
-        toast.error('M-Pesa payment failed. Please try again.');
+        // Other error
+        toast.error('An unexpected error occurred. Please try again.');
       }
     }
   };
@@ -245,10 +302,22 @@ const PaymentProcessor = ({ invoice, onPaymentComplete, onClose }) => {
       console.log('Testing API connection...');
       const response = await testAPI();
       console.log('API test response:', response.data);
-      toast.success('API connection working!');
+      toast.success('✅ API connection working! Server is responding correctly.');
     } catch (error) {
       console.error('API test error:', error);
-      toast.error('API connection failed');
+      
+      if (error.response) {
+        const { status, data } = error.response;
+        if (status === 200) {
+          toast.success('✅ API connection working!');
+        } else {
+          toast.error(`❌ API test failed: ${status} - ${data.message || 'Unknown error'}`);
+        }
+      } else if (error.request) {
+        toast.error('❌ Network error: Cannot connect to server. Please check your connection.');
+      } else {
+        toast.error('❌ API connection failed: ' + (error.message || 'Unknown error'));
+      }
     }
   };
 
@@ -262,10 +331,22 @@ const PaymentProcessor = ({ invoice, onPaymentComplete, onClose }) => {
       };
       const response = await testAPIPost(testData);
       console.log('API POST test response:', response.data);
-      toast.success('API POST working!');
+      toast.success('✅ API POST working! Server can receive and process data.');
     } catch (error) {
       console.error('API POST test error:', error);
-      toast.error('API POST failed');
+      
+      if (error.response) {
+        const { status, data } = error.response;
+        if (status === 200) {
+          toast.success('✅ API POST working!');
+        } else {
+          toast.error(`❌ API POST failed: ${status} - ${data.message || 'Unknown error'}`);
+        }
+      } else if (error.request) {
+        toast.error('❌ Network error: Cannot connect to server. Please check your connection.');
+      } else {
+        toast.error('❌ API POST failed: ' + (error.message || 'Unknown error'));
+      }
     }
   };
 

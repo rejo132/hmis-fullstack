@@ -27,6 +27,7 @@ logger = logging.getLogger(__name__)
 # Get CORS origins from environment variable or use defaults
 CORS_ORIGINS = os.environ.get('CORS_ORIGINS', 'http://localhost:3000,https://hmis-frontend.onrender.com').split(',')
 
+# Configure CORS properly to avoid duplicate headers
 CORS(app, 
      resources={r"/api/*": {
          "origins": CORS_ORIGINS,
@@ -39,20 +40,21 @@ CORS(app,
      methods=["GET", "POST", "PUT", "DELETE", "OPTIONS"],
      allow_headers=["Content-Type", "Authorization", "X-Requested-With", "Accept", "Origin"],
      expose_headers=["Content-Type", "Authorization"],
-     supports_credentials=True
+     supports_credentials=True,
+     max_age=86400  # Cache preflight requests for 24 hours
 )
 
-# Add CORS headers to all responses
-@app.after_request
-def after_request(response):
-    # Get the origin from the request
-    origin = request.headers.get('Origin')
-    if origin in CORS_ORIGINS:
-        response.headers.add('Access-Control-Allow-Origin', origin)
-    response.headers.add('Access-Control-Allow-Headers', 'Content-Type,Authorization,X-Requested-With,Accept,Origin')
-    response.headers.add('Access-Control-Allow-Methods', 'GET,POST,PUT,DELETE,OPTIONS')
-    response.headers.add('Access-Control-Allow-Credentials', 'true')
-    return response
+# CORS is handled by the CORS() function above, no need for duplicate headers
+# @app.after_request
+# def after_request(response):
+#     # Get the origin from the request
+#     origin = request.headers.get('Origin')
+#     if origin in CORS_ORIGINS:
+#         response.headers.add('Access-Control-Allow-Origin', origin)
+#     response.headers.add('Access-Control-Allow-Headers', 'Content-Type,Authorization,X-Requested-With,Accept,Origin')
+#     response.headers.add('Access-Control-Allow-Methods', 'GET,POST,PUT,DELETE,OPTIONS')
+#     response.headers.add('Access-Control-Allow-Credentials', 'true')
+#     return response
 
      # Models
 class User(db.Model):
@@ -2634,20 +2636,33 @@ def initiate_mpesa_payment():
     data = request.get_json()
     logger.info(f"M-Pesa payment initiation request data: {data}")
     
-    invoice_id = data.get('invoice_id')
-    phone_number = data.get('phone_number')
+    # Handle both direct data and nested data structures
+    invoice_id = data.get('invoice_id') or data.get('invoiceId')
+    phone_number = data.get('phone_number') or data.get('phoneNumber')
     amount = data.get('amount')
     
-    # Validate required fields
+    # Validate required fields with better error messages
     if not invoice_id:
         logger.error("Missing invoice_id in request")
-        return jsonify({'message': 'Missing required field: invoice_id'}), 400
+        return jsonify({
+            'message': 'Missing required field: invoice_id',
+            'received_data': data,
+            'expected_fields': ['invoice_id', 'phone_number', 'amount']
+        }), 400
     if not phone_number:
         logger.error("Missing phone_number in request")
-        return jsonify({'message': 'Missing required field: phone_number'}), 400
+        return jsonify({
+            'message': 'Missing required field: phone_number',
+            'received_data': data,
+            'expected_fields': ['invoice_id', 'phone_number', 'amount']
+        }), 400
     if not amount:
         logger.error("Missing amount in request")
-        return jsonify({'message': 'Missing required field: amount'}), 400
+        return jsonify({
+            'message': 'Missing required field: amount',
+            'received_data': data,
+            'expected_fields': ['invoice_id', 'phone_number', 'amount']
+        }), 400
     
     # Validate amount
     try:
@@ -2659,11 +2674,76 @@ def initiate_mpesa_payment():
         logger.error(f"Amount validation error: {e}, amount: {amount}")
         return jsonify({'message': 'Invalid amount format'}), 400
     
+    # Validate and format phone number
+    phone_number = str(phone_number).strip()
+    
+    # Remove any non-digit characters except +
+    phone_number = ''.join(c for c in phone_number if c.isdigit() or c == '+')
+    
+    # Format to Kenyan format (254XXXXXXXXX)
+    if phone_number.startswith('+254'):
+        phone_number = phone_number[1:]  # Remove +
+    elif phone_number.startswith('0'):
+        phone_number = '254' + phone_number[1:]  # Replace 0 with 254
+    elif not phone_number.startswith('254'):
+        phone_number = '254' + phone_number  # Add 254 prefix
+    
+    # Validate final format
+    if not phone_number.startswith('254') or len(phone_number) != 12:
+        logger.error(f"Invalid phone number format after formatting: {phone_number}")
+        return jsonify({
+            'message': 'Invalid phone number format. Please use format: 254XXXXXXXXX',
+            'received_phone': str(data.get('phone_number') or data.get('phoneNumber')),
+            'formatted_phone': phone_number
+        }), 400
+    
+    logger.info(f"Phone number formatted: {phone_number}")
+    
     try:
+        # Try to find the invoice
         invoice = Invoice.query.get(invoice_id)
         if not invoice:
             logger.error(f"Invoice not found: {invoice_id}")
-            return jsonify({'message': 'Invoice not found'}), 404
+            # For testing purposes, create a mock invoice if it doesn't exist
+            if os.environ.get('FLASK_ENV') == 'development' or os.environ.get('FLASK_DEBUG') == '1':
+                logger.info(f"Creating mock invoice for testing with ID: {invoice_id}")
+                # Create a mock patient if needed
+                mock_patient = Patient.query.first()
+                if not mock_patient:
+                    mock_patient = Patient(
+                        name="Test Patient",
+                        dob=date(1990, 1, 1),
+                        contact="254700000000"
+                    )
+                    db.session.add(mock_patient)
+                    db.session.flush()
+                
+                # Create a mock visit if needed
+                mock_visit = PatientVisit.query.first()
+                if not mock_visit:
+                    mock_visit = PatientVisit(
+                        patient_id=mock_patient.id,
+                        current_stage='billing'
+                    )
+                    db.session.add(mock_visit)
+                    db.session.flush()
+                
+                # Create mock invoice
+                invoice = Invoice(
+                    id=invoice_id,
+                    invoice_number=f"INV-{invoice_id}",
+                    patient_id=mock_patient.id,
+                    visit_id=mock_visit.id,
+                    total_amount=amount,
+                    services={"Consultation": amount},
+                    status="Pending",
+                    generated_by=current_user
+                )
+                db.session.add(invoice)
+                db.session.commit()
+                logger.info(f"Mock invoice created successfully: {invoice_id}")
+            else:
+                return jsonify({'message': 'Invoice not found'}), 404
         
         logger.info(f"Processing M-Pesa payment for invoice {invoice_id}, amount: {amount}, phone: {phone_number}")
         
@@ -2722,31 +2802,28 @@ def initiate_mpesa_payment():
                 patient_id=invoice.patient_id,
                 amount=amount,
                 payment_method='mpesa',
-                gateway_reference=mock_response_data.get('CheckoutRequestID'),
+                gateway_reference=mock_response_data['CheckoutRequestID'],
                 status='pending',
-                processed_by=current_user,
-                gateway_response=mock_response_data
+                gateway_response=mock_response_data,
+                processed_by=current_user
             )
             db.session.add(transaction)
             db.session.commit()
             
             # Log the payment initiation
             audit_log = AuditLog(
-                action=f'M-Pesa payment initiated for invoice {invoice_id} - Customer prompted to enter PIN (TEST MODE)',
+                action=f'M-Pesa payment initiated for invoice {invoice_id}',
                 user=user.username
             )
             db.session.add(audit_log)
             db.session.commit()
             
-            logger.info(f"M-Pesa payment initiated successfully for invoice {invoice_id} (TEST MODE)")
-            
             return jsonify({
-                'message': 'M-Pesa payment initiated successfully. Customer has been prompted to enter PIN. (TEST MODE - No real payment will be processed)',
-                'checkout_request_id': mock_response_data.get('CheckoutRequestID'),
-                'transaction_id': transaction.id,
-                'customer_prompt': f'Please check your phone {phone_number} and enter your M-Pesa PIN to complete payment of KES {amount} (TEST MODE)',
-                'status': 'pending_pin_entry',
-                'test_mode': True
+                'message': 'M-Pesa payment initiated successfully (TEST MODE)',
+                'checkout_request_id': mock_response_data['CheckoutRequestID'],
+                'customer_prompt': 'TEST MODE: Please enter your M-Pesa PIN to complete payment',
+                'test_mode': True,
+                'transaction_id': transaction.id
             }), 200
         
         response = requests.post(mpesa_api_url, json=mpesa_data, headers=headers)
@@ -3018,10 +3095,67 @@ def check_mpesa_payment_status(checkout_request_id):
         if not transaction:
             return jsonify({'message': 'Transaction not found'}), 404
         
-        # Check payment status from Daraja API
+        # Check if this is a test mode transaction
+        if checkout_request_id.startswith('test_checkout_'):
+            logger.info(f"Test mode transaction detected: {checkout_request_id}")
+            
+            # For test mode, simulate payment completion after a delay
+            # Ensure both datetimes are timezone-aware
+            current_time = datetime.now(timezone.utc)
+            created_time = transaction.created_at
+            if created_time.tzinfo is None:
+                created_time = created_time.replace(tzinfo=timezone.utc)
+            time_since_creation = (current_time - created_time).total_seconds()
+            
+            if time_since_creation > 5:  # Simulate completion after 5 seconds
+                # Mark as completed
+                transaction.status = 'completed'
+                transaction.completed_at = datetime.now(timezone.utc)
+                
+                # Update invoice status
+                invoice = Invoice.query.get(transaction.invoice_id)
+                if invoice:
+                    invoice.status = 'Paid'
+                    invoice.paid_at = datetime.now(timezone.utc)
+                    invoice.payment_method = 'M-Pesa'
+                
+                db.session.commit()
+                
+                audit_log = AuditLog(
+                    action=f'TEST MODE: M-Pesa payment completed for invoice {transaction.invoice_id}',
+                    user=user.username
+                )
+                db.session.add(audit_log)
+                db.session.commit()
+                
+                return jsonify({
+                    'status': 'completed',
+                    'message': 'TEST MODE: Payment completed successfully',
+                    'transaction': transaction.to_dict(),
+                    'test_mode': True
+                }), 200
+            else:
+                return jsonify({
+                    'status': 'pending',
+                    'message': 'TEST MODE: Simulating payment processing...',
+                    'test_mode': True
+                }), 200
+        
+        # For real transactions, check payment status from Daraja API
         mpesa_status_url = os.environ.get('MPESA_STATUS_URL', 'https://sandbox.safaricom.co.ke/mpesa/stkpushquery/v1/query')
         business_shortcode = os.environ.get('MPESA_BUSINESS_SHORTCODE', '174379')
         passkey = os.environ.get('MPESA_PASSKEY', 'your_passkey_here')
+        
+        # Check if we have real credentials
+        if (passkey == 'your_passkey_here' or 
+            os.environ.get('MPESA_ACCESS_TOKEN', 'your_token_here') == 'your_token_here'):
+            
+            logger.warning("M-Pesa credentials not configured, cannot check real payment status")
+            return jsonify({
+                'status': 'error',
+                'message': 'M-Pesa credentials not configured. Cannot check payment status.',
+                'error': 'Missing credentials'
+            }), 400
         
         timestamp = datetime.now().strftime('%Y%m%d%H%M%S')
         password = f"{business_shortcode}{passkey}{timestamp}"

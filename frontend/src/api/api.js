@@ -11,13 +11,28 @@ const api = axios.create({
 api.interceptors.request.use(
   (config) => {
     const token = localStorage.getItem('access_token');
+    console.log('API Interceptor: Request URL:', config.url);
+    console.log('API Interceptor: Token from localStorage:', token);
+    
     if (token) {
       config.headers.Authorization = `Bearer ${token}`;
+      console.log('API Interceptor: Authorization header set');
+    } else {
+      console.log('API Interceptor: No token found in localStorage');
     }
+    
     // Ensure page is a number
     if (config.params && config.params.page) {
       config.params.page = Number(config.params.page);
     }
+    
+    console.log('API Interceptor: Final config:', {
+      url: config.url,
+      method: config.method,
+      headers: config.headers,
+      data: config.data
+    });
+    
     return config;
   },
   (error) => Promise.reject(error)

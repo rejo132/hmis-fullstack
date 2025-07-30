@@ -222,19 +222,34 @@ const BillingManagement = () => {
 
   const handleClaimSubmit = async (e) => {
     e.preventDefault();
+    
+    // Debug: Check authentication state
+    console.log('Current user:', user);
+    console.log('Access token:', access_token);
+    console.log('LocalStorage token:', localStorage.getItem('access_token'));
+    
+    // Check if user is authenticated
+    if (!access_token) {
+      toast.error('You must be logged in to submit insurance claims');
+      return;
+    }
+    
     try {
+      console.log('Submitting claim with data:', {
+        billId: formData.claimId,
+        insuranceProvider: formData.insuranceProvider,
+      });
+      
       await dispatch(
         submitClaim({
-          claimId: formData.claimId,
+          billId: formData.claimId, // Using claimId as billId since that's what the form collects
           insuranceProvider: formData.insuranceProvider,
-          claimAmount: formData.claimAmount,
-          processedBy: user.username,
-          token: access_token,
         })
       ).unwrap();
       toast.success('Insurance claim submitted successfully');
       setFormData({ ...formData, claimId: '', insuranceProvider: '', claimAmount: '' });
     } catch (err) {
+      console.error('Claim submission error:', err);
       toast.error(`Error submitting claim: ${err}`);
     }
   };
@@ -459,7 +474,7 @@ const BillingManagement = () => {
                 <input
                   type="text"
                   name="claimId"
-                  placeholder="Claim ID"
+                  placeholder="Bill ID (to submit for insurance claim)"
                   value={formData.claimId}
                   onChange={handleChange}
                   className="w-full p-2 border rounded"
