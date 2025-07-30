@@ -1,4 +1,10 @@
 services:
+  - type: pserv
+    name: hmis-database
+    env: postgresql
+    plan: free
+    ipAllowList: []
+    
   - type: web
     name: hmis-backend
     env: python
@@ -11,7 +17,9 @@ services:
       - key: FLASK_APP
         value: app.py
       - key: DATABASE_URL
-        value: <PASTE_YOUR_RENDER_DATABASE_URL_HERE>
+        fromDatabase:
+          name: hmis-database
+          property: connectionString
       - key: JWT_SECRET_KEY
         generateValue: true
       - key: SECRET_KEY

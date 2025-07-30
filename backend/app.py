@@ -18,15 +18,18 @@ jwt = JWTManager(app)
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
+# Get CORS origins from environment variable or use defaults
+CORS_ORIGINS = os.environ.get('CORS_ORIGINS', 'http://localhost:3000,https://hmis-frontend.onrender.com').split(',')
+
 CORS(app, 
      resources={r"/api/*": {
-         "origins": ["http://localhost:3000", "https://hmis-frontend.onrender.com"],
+         "origins": CORS_ORIGINS,
          "methods": ["GET", "POST", "PUT", "DELETE", "OPTIONS"],
          "allow_headers": ["Content-Type", "Authorization", "X-Requested-With", "Accept", "Origin"],
          "expose_headers": ["Content-Type", "Authorization"],
          "supports_credentials": True
      }},
-     origins=["http://localhost:3000", "https://hmis-frontend.onrender.com"],
+     origins=CORS_ORIGINS,
      methods=["GET", "POST", "PUT", "DELETE", "OPTIONS"],
      allow_headers=["Content-Type", "Authorization", "X-Requested-With", "Accept", "Origin"],
      expose_headers=["Content-Type", "Authorization"],
@@ -36,7 +39,10 @@ CORS(app,
 # Add CORS headers to all responses
 @app.after_request
 def after_request(response):
-    response.headers.add('Access-Control-Allow-Origin', 'http://localhost:3000')
+    # Get the origin from the request
+    origin = request.headers.get('Origin')
+    if origin in CORS_ORIGINS:
+        response.headers.add('Access-Control-Allow-Origin', origin)
     response.headers.add('Access-Control-Allow-Headers', 'Content-Type,Authorization,X-Requested-With,Accept,Origin')
     response.headers.add('Access-Control-Allow-Methods', 'GET,POST,PUT,DELETE,OPTIONS')
     response.headers.add('Access-Control-Allow-Credentials', 'true')
