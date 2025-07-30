@@ -1,10 +1,8 @@
-import React, { useState, useEffect } from 'react';
-import { useSelector } from 'react-redux';
+import React, { useState, useEffect, useCallback } from 'react';
 import toast from 'react-hot-toast';
 import { createPaymentIntent, initiateMpesaPayment, confirmPayment, checkMpesaPaymentStatus } from '../api/api';
 
 const PaymentProcessor = ({ invoice, onPaymentComplete, onClose }) => {
-  const { user } = useSelector((state) => state.auth);
   const [paymentMethod, setPaymentMethod] = useState('cash');
   const [phoneNumber, setPhoneNumber] = useState('');
   const [loading, setLoading] = useState(false);
@@ -18,20 +16,7 @@ const PaymentProcessor = ({ invoice, onPaymentComplete, onClose }) => {
     cardholderName: ''
   });
 
-  // Poll for M-Pesa payment status
-  useEffect(() => {
-    let interval;
-    if (checkoutRequestId && mpesaStatus === 'pending') {
-      interval = setInterval(async () => {
-        await checkPaymentStatus();
-      }, 3000); // Check every 3 seconds
-    }
-    return () => {
-      if (interval) clearInterval(interval);
-    };
-  }, [checkoutRequestId, mpesaStatus]);
-
-  const checkPaymentStatus = async () => {
+  const checkPaymentStatus = useCallback(async () => {
     if (!checkoutRequestId) return;
     
     setStatusChecking(true);
@@ -58,7 +43,20 @@ const PaymentProcessor = ({ invoice, onPaymentComplete, onClose }) => {
     } finally {
       setStatusChecking(false);
     }
-  };
+  }, [checkoutRequestId, invoice.total_amount, onPaymentComplete]);
+
+  // Poll for M-Pesa payment status
+  useEffect(() => {
+    let interval;
+    if (checkoutRequestId && mpesaStatus === 'pending') {
+      interval = setInterval(async () => {
+        await checkPaymentStatus();
+      }, 3000); // Check every 3 seconds
+    }
+    return () => {
+      if (interval) clearInterval(interval);
+    };
+  }, [checkoutRequestId, mpesaStatus, checkPaymentStatus]);
 
   const handlePayment = async () => {
     if (!invoice) {
