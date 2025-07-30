@@ -87,6 +87,10 @@ export const getCommunicationSettings = () => api.get('/api/communication-settin
 export const addCommunication = (data) => api.post('/api/communications', data);
 export const toggleCommunicationSetting = (data) => api.put('/api/communication-settings', data);
 
+// Test API Functions
+export const testAPI = () => api.get('/api/test');
+export const testAPIPost = (data) => api.post('/api/test', data);
+
 // Payment API Functions
 export const createPaymentIntent = (data) => api.post('/api/payments/create-intent', data);
 export const initiateMpesaPayment = (data) => api.post('/api/payments/mpesa/initiate', data);

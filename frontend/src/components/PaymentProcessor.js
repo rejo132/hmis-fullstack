@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useCallback } from 'react';
-import toast from 'react-hot-toast';
-import { createPaymentIntent, initiateMpesaPayment, confirmPayment, checkMpesaPaymentStatus } from '../api/api';
+import { toast } from 'react-hot-toast';
+import { initiateMpesaPayment, checkMpesaPaymentStatus, testAPI, testAPIPost } from '../api/api';
 
 const PaymentProcessor = ({ invoice, onPaymentComplete, onClose }) => {
   const [paymentMethod, setPaymentMethod] = useState('cash');
@@ -126,7 +126,7 @@ const PaymentProcessor = ({ invoice, onPaymentComplete, onClose }) => {
       }
 
       // Create payment intent
-      const response = await createPaymentIntent({
+      const response = await testAPIPost({
         invoice_id: invoice.id,
         amount: amount
       });
@@ -146,7 +146,7 @@ const PaymentProcessor = ({ invoice, onPaymentComplete, onClose }) => {
 
   const handleMpesaPayment = async () => {
     if (!phoneNumber) {
-      toast.error('Please enter phone number');
+      toast.error('Please enter a phone number');
       return;
     }
 
@@ -157,11 +157,17 @@ const PaymentProcessor = ({ invoice, onPaymentComplete, onClose }) => {
     }
 
     try {
-      const response = await initiateMpesaPayment({
+      // Debug: Log the request data
+      const requestData = {
         invoice_id: invoice.id,
         phone_number: phoneNumber,
         amount: amount
-      });
+      };
+      console.log('M-Pesa payment request data:', requestData);
+      console.log('Invoice object:', invoice);
+      console.log('Token from localStorage:', localStorage.getItem('access_token'));
+
+      const response = await initiateMpesaPayment(requestData);
 
       setCheckoutRequestId(response.data.checkout_request_id);
       setMpesaStatus('pending');
@@ -217,7 +223,7 @@ const PaymentProcessor = ({ invoice, onPaymentComplete, onClose }) => {
       }
 
       // Create a manual payment transaction
-      const response = await confirmPayment({
+      const response = await testAPIPost({
         invoice_id: invoice.id,
         payment_method: 'cash',
         amount: amount
@@ -231,6 +237,35 @@ const PaymentProcessor = ({ invoice, onPaymentComplete, onClose }) => {
       });
     } catch (error) {
       throw new Error('Cash payment confirmation failed');
+    }
+  };
+
+  const handleTestAPI = async () => {
+    try {
+      console.log('Testing API connection...');
+      const response = await testAPI();
+      console.log('API test response:', response.data);
+      toast.success('API connection working!');
+    } catch (error) {
+      console.error('API test error:', error);
+      toast.error('API connection failed');
+    }
+  };
+
+  const handleTestAPIPost = async () => {
+    try {
+      console.log('Testing API POST...');
+      const testData = {
+        invoice_id: invoice?.id || 123,
+        phone_number: phoneNumber || '254700000000',
+        amount: getPaymentAmount() || 1000
+      };
+      const response = await testAPIPost(testData);
+      console.log('API POST test response:', response.data);
+      toast.success('API POST working!');
+    } catch (error) {
+      console.error('API POST test error:', error);
+      toast.error('API POST failed');
     }
   };
 
@@ -396,6 +431,25 @@ const PaymentProcessor = ({ invoice, onPaymentComplete, onClose }) => {
             </div>
           </div>
         )}
+
+        {/* Test Buttons for Debugging */}
+        <div className="mb-4 p-3 bg-yellow-50 border border-yellow-200 rounded-lg">
+          <h4 className="font-medium text-yellow-800 mb-2">🔧 Debug Tools</h4>
+          <div className="flex space-x-2">
+            <button
+              onClick={handleTestAPI}
+              className="px-3 py-1 bg-yellow-500 text-white text-xs rounded hover:bg-yellow-600"
+            >
+              Test API GET
+            </button>
+            <button
+              onClick={handleTestAPIPost}
+              className="px-3 py-1 bg-yellow-500 text-white text-xs rounded hover:bg-yellow-600"
+            >
+              Test API POST
+            </button>
+          </div>
+        </div>
 
         {/* Action Buttons */}
         <div className="flex space-x-3">

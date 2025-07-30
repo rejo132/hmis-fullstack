@@ -3137,5 +3137,23 @@ def test_mpesa_config():
         logger.error(f"Error testing M-Pesa config: {str(e)}")
         return jsonify({'message': f'Error testing M-Pesa config: {str(e)}'}), 500
 
+@app.route('/api/test', methods=['GET', 'POST'])
+def test_endpoint():
+    """Simple test endpoint without authentication"""
+    if request.method == 'GET':
+        return jsonify({
+            'message': 'Test endpoint working',
+            'method': 'GET',
+            'timestamp': datetime.now().isoformat()
+        }), 200
+    else:
+        data = request.get_json() or {}
+        return jsonify({
+            'message': 'Test endpoint working',
+            'method': 'POST',
+            'received_data': data,
+            'timestamp': datetime.now().isoformat()
+        }), 200
+
 if __name__ == '__main__':
     app.run(debug=True, port=5000)
