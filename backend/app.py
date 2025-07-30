@@ -2636,8 +2636,21 @@ def initiate_mpesa_payment():
     phone_number = data.get('phone_number')
     amount = data.get('amount')
     
-    if not all([invoice_id, phone_number, amount]):
-        return jsonify({'message': 'Missing required fields'}), 400
+    # Validate required fields
+    if not invoice_id:
+        return jsonify({'message': 'Missing required field: invoice_id'}), 400
+    if not phone_number:
+        return jsonify({'message': 'Missing required field: phone_number'}), 400
+    if not amount:
+        return jsonify({'message': 'Missing required field: amount'}), 400
+    
+    # Validate amount
+    try:
+        amount = float(amount)
+        if amount <= 0:
+            return jsonify({'message': 'Amount must be greater than 0'}), 400
+    except (ValueError, TypeError):
+        return jsonify({'message': 'Invalid amount format'}), 400
     
     try:
         invoice = Invoice.query.get(invoice_id)
@@ -2659,7 +2672,7 @@ def initiate_mpesa_payment():
             "Password": password,
             "Timestamp": timestamp,
             "TransactionType": "CustomerPayBillOnline",
-            "Amount": int(float(amount)),
+            "Amount": int(amount),
             "PartyA": phone_number,
             "PartyB": business_shortcode,
             "PhoneNumber": phone_number,
@@ -2708,8 +2721,9 @@ def initiate_mpesa_payment():
                 'status': 'pending_pin_entry'
             }), 200
         else:
+            error_message = response_data.get('errorMessage', 'Unknown error')
             return jsonify({
-                'message': 'Failed to initiate M-Pesa payment',
+                'message': f'Failed to initiate M-Pesa payment: {error_message}',
                 'error': response_data
             }), 400
             

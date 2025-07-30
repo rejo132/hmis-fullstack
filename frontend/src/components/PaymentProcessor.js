@@ -16,6 +16,25 @@ const PaymentProcessor = ({ invoice, onPaymentComplete, onClose }) => {
     cardholderName: ''
   });
 
+  const getPaymentAmount = useCallback(() => {
+    // Get amount from invoice, with fallback
+    if (invoice && invoice.total_amount) {
+      return parseFloat(invoice.total_amount) || 0;
+    }
+    return 0;
+  }, [invoice]);
+
+  const formatCurrency = useCallback((amount) => {
+    // Handle NaN and invalid amounts
+    if (!amount || isNaN(amount) || amount === null || amount === undefined) {
+      return 'KES 0.00';
+    }
+    return new Intl.NumberFormat('en-KE', {
+      style: 'currency',
+      currency: 'KES'
+    }).format(amount);
+  }, []);
+
   const checkPaymentStatus = useCallback(async () => {
     if (!checkoutRequestId) return;
     
@@ -29,7 +48,7 @@ const PaymentProcessor = ({ invoice, onPaymentComplete, onClose }) => {
         toast.success('M-Pesa payment completed successfully!');
         onPaymentComplete({
           method: 'mpesa',
-          amount: invoice.total_amount,
+          amount: getPaymentAmount(),
           transaction_id: response.data.transaction.id
         });
       } else if (status === 'failed') {
@@ -43,7 +62,7 @@ const PaymentProcessor = ({ invoice, onPaymentComplete, onClose }) => {
     } finally {
       setStatusChecking(false);
     }
-  }, [checkoutRequestId, invoice.total_amount, onPaymentComplete]);
+  }, [checkoutRequestId, getPaymentAmount, onPaymentComplete]);
 
   // Poll for M-Pesa payment status
   useEffect(() => {
@@ -88,10 +107,16 @@ const PaymentProcessor = ({ invoice, onPaymentComplete, onClose }) => {
 
   const handleStripePayment = async () => {
     try {
+      const amount = getPaymentAmount();
+      if (amount <= 0) {
+        toast.error('Invalid payment amount');
+        return;
+      }
+
       // Create payment intent
       const response = await createPaymentIntent({
         invoice_id: invoice.id,
-        amount: invoice.total_amount
+        amount: amount
       });
 
       // In a real implementation, you would integrate with Stripe Elements
@@ -99,7 +124,7 @@ const PaymentProcessor = ({ invoice, onPaymentComplete, onClose }) => {
       toast.success('Stripe payment processed successfully');
       onPaymentComplete({
         method: 'stripe',
-        amount: invoice.total_amount,
+        amount: amount,
         transaction_id: response.data.transaction_id
       });
     } catch (error) {
@@ -113,11 +138,17 @@ const PaymentProcessor = ({ invoice, onPaymentComplete, onClose }) => {
       return;
     }
 
+    const amount = getPaymentAmount();
+    if (amount <= 0) {
+      toast.error('Invalid payment amount');
+      return;
+    }
+
     try {
       const response = await initiateMpesaPayment({
         invoice_id: invoice.id,
         phone_number: phoneNumber,
-        amount: invoice.total_amount
+        amount: amount
       });
 
       setCheckoutRequestId(response.data.checkout_request_id);
@@ -134,35 +165,39 @@ const PaymentProcessor = ({ invoice, onPaymentComplete, onClose }) => {
       });
       
     } catch (error) {
-      throw new Error('M-Pesa payment failed');
+      console.error('M-Pesa payment error:', error);
+      if (error.response && error.response.data && error.response.data.message) {
+        toast.error(`M-Pesa payment failed: ${error.response.data.message}`);
+      } else {
+        toast.error('M-Pesa payment failed. Please try again.');
+      }
     }
   };
 
   const handleCashPayment = async () => {
     try {
+      const amount = getPaymentAmount();
+      if (amount <= 0) {
+        toast.error('Invalid payment amount');
+        return;
+      }
+
       // Create a manual payment transaction
       const response = await confirmPayment({
         invoice_id: invoice.id,
         payment_method: 'cash',
-        amount: invoice.total_amount
+        amount: amount
       });
 
       toast.success('Cash payment confirmed');
       onPaymentComplete({
         method: 'cash',
-        amount: invoice.total_amount,
+        amount: amount,
         transaction_id: response.data.transaction_id
       });
     } catch (error) {
       throw new Error('Cash payment confirmation failed');
     }
-  };
-
-  const formatCurrency = (amount) => {
-    return new Intl.NumberFormat('en-KE', {
-      style: 'currency',
-      currency: 'KES'
-    }).format(amount);
   };
 
   const getMpesaStatusMessage = () => {
@@ -195,10 +230,10 @@ const PaymentProcessor = ({ invoice, onPaymentComplete, onClose }) => {
         <div className="bg-gray-50 p-4 rounded-lg mb-4">
           <h3 className="font-semibold mb-2">Invoice Summary</h3>
           <div className="space-y-1 text-sm">
-            <div>Invoice #: {invoice.invoice_number}</div>
-            <div>Patient ID: {invoice.patient_id}</div>
+            <div>Invoice #: {invoice.invoice_number || 'N/A'}</div>
+            <div>Patient ID: {invoice.patient_id || 'N/A'}</div>
             <div className="text-lg font-bold">
-              Total: {formatCurrency(invoice.total_amount)}
+              Total: {formatCurrency(getPaymentAmount())}
             </div>
           </div>
         </div>
@@ -351,7 +386,7 @@ const PaymentProcessor = ({ invoice, onPaymentComplete, onClose }) => {
               disabled={loading}
               className="flex-1 px-4 py-2 bg-blue-600 text-white rounded hover:bg-blue-700 disabled:opacity-50"
             >
-              {loading ? 'Processing...' : `Pay ${formatCurrency(invoice.total_amount)}`}
+              {loading ? 'Processing...' : 'Pay'}
             </button>
           )}
         </div>
