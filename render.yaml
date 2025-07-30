@@ -26,8 +26,6 @@ services:
         generateValue: true
       - key: CORS_ORIGINS
         value: https://hmis-frontend.onrender.com
-      - key: PYTHONPATH
-        value: backend
 
   - type: web
     name: hmis-frontend
