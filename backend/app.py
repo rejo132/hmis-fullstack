@@ -2632,30 +2632,40 @@ def initiate_mpesa_payment():
         return jsonify({'message': 'Unauthorized access'}), 403
     
     data = request.get_json()
+    logger.info(f"M-Pesa payment initiation request data: {data}")
+    
     invoice_id = data.get('invoice_id')
     phone_number = data.get('phone_number')
     amount = data.get('amount')
     
     # Validate required fields
     if not invoice_id:
+        logger.error("Missing invoice_id in request")
         return jsonify({'message': 'Missing required field: invoice_id'}), 400
     if not phone_number:
+        logger.error("Missing phone_number in request")
         return jsonify({'message': 'Missing required field: phone_number'}), 400
     if not amount:
+        logger.error("Missing amount in request")
         return jsonify({'message': 'Missing required field: amount'}), 400
     
     # Validate amount
     try:
         amount = float(amount)
         if amount <= 0:
+            logger.error(f"Invalid amount: {amount}")
             return jsonify({'message': 'Amount must be greater than 0'}), 400
-    except (ValueError, TypeError):
+    except (ValueError, TypeError) as e:
+        logger.error(f"Amount validation error: {e}, amount: {amount}")
         return jsonify({'message': 'Invalid amount format'}), 400
     
     try:
         invoice = Invoice.query.get(invoice_id)
         if not invoice:
+            logger.error(f"Invoice not found: {invoice_id}")
             return jsonify({'message': 'Invoice not found'}), 404
+        
+        logger.info(f"Processing M-Pesa payment for invoice {invoice_id}, amount: {amount}, phone: {phone_number}")
         
         # M-Pesa API configuration (Daraja API)
         mpesa_api_url = os.environ.get('MPESA_API_URL', 'https://sandbox.safaricom.co.ke/mpesa/stkpush/v1/processrequest')
@@ -2681,14 +2691,68 @@ def initiate_mpesa_payment():
             "TransactionDesc": f"Hospital Services - Invoice {invoice_id} - Please enter your M-Pesa PIN to complete payment"
         }
         
+        logger.info(f"M-Pesa API request data: {mpesa_data}")
+        
         # Make M-Pesa API call to Daraja
         headers = {
             'Authorization': f'Bearer {os.environ.get("MPESA_ACCESS_TOKEN", "your_token_here")}',
             'Content-Type': 'application/json'
         }
         
+        logger.info(f"Making M-Pesa API call to: {mpesa_api_url}")
+        
+        # Check if we're in test mode (no real credentials)
+        if (os.environ.get('MPESA_PASSKEY', 'your_passkey_here') == 'your_passkey_here' or 
+            os.environ.get('MPESA_ACCESS_TOKEN', 'your_token_here') == 'your_token_here'):
+            
+            logger.warning("M-Pesa credentials not configured, using test mode")
+            
+            # Create a mock successful response for testing
+            mock_response_data = {
+                'ResponseCode': '0',
+                'CheckoutRequestID': f'test_checkout_{int(datetime.now().timestamp())}',
+                'ResponseDescription': 'Success. Request accepted for processing',
+                'MerchantRequestID': f'test_merchant_{int(datetime.now().timestamp())}',
+                'CustomerMessage': 'Success. Request accepted for processing'
+            }
+            
+            # Create payment transaction record
+            transaction = PaymentTransaction(
+                invoice_id=invoice_id,
+                patient_id=invoice.patient_id,
+                amount=amount,
+                payment_method='mpesa',
+                gateway_reference=mock_response_data.get('CheckoutRequestID'),
+                status='pending',
+                processed_by=current_user,
+                gateway_response=mock_response_data
+            )
+            db.session.add(transaction)
+            db.session.commit()
+            
+            # Log the payment initiation
+            audit_log = AuditLog(
+                action=f'M-Pesa payment initiated for invoice {invoice_id} - Customer prompted to enter PIN (TEST MODE)',
+                user=user.username
+            )
+            db.session.add(audit_log)
+            db.session.commit()
+            
+            logger.info(f"M-Pesa payment initiated successfully for invoice {invoice_id} (TEST MODE)")
+            
+            return jsonify({
+                'message': 'M-Pesa payment initiated successfully. Customer has been prompted to enter PIN. (TEST MODE - No real payment will be processed)',
+                'checkout_request_id': mock_response_data.get('CheckoutRequestID'),
+                'transaction_id': transaction.id,
+                'customer_prompt': f'Please check your phone {phone_number} and enter your M-Pesa PIN to complete payment of KES {amount} (TEST MODE)',
+                'status': 'pending_pin_entry',
+                'test_mode': True
+            }), 200
+        
         response = requests.post(mpesa_api_url, json=mpesa_data, headers=headers)
         response_data = response.json()
+        
+        logger.info(f"M-Pesa API response status: {response.status_code}, data: {response_data}")
         
         if response.status_code == 200 and response_data.get('ResponseCode') == '0':
             # Create payment transaction record
@@ -2713,6 +2777,8 @@ def initiate_mpesa_payment():
             db.session.add(audit_log)
             db.session.commit()
             
+            logger.info(f"M-Pesa payment initiated successfully for invoice {invoice_id}")
+            
             return jsonify({
                 'message': 'M-Pesa payment initiated successfully. Customer has been prompted to enter PIN.',
                 'checkout_request_id': response_data.get('CheckoutRequestID'),
@@ -2722,6 +2788,7 @@ def initiate_mpesa_payment():
             }), 200
         else:
             error_message = response_data.get('errorMessage', 'Unknown error')
+            logger.error(f"M-Pesa API error: {error_message}, full response: {response_data}")
             return jsonify({
                 'message': f'Failed to initiate M-Pesa payment: {error_message}',
                 'error': response_data
@@ -3028,6 +3095,47 @@ def check_mpesa_payment_status(checkout_request_id):
     except Exception as e:
         logger.error(f"Error checking M-Pesa payment status: {str(e)}")
         return jsonify({'message': f'Error checking payment status: {str(e)}'}), 500
+
+@app.route('/api/payments/mpesa/test', methods=['GET'])
+@jwt_required()
+def test_mpesa_config():
+    """Test M-Pesa configuration without making actual API calls"""
+    current_user = get_jwt_identity()
+    user = User.query.get(current_user)
+    
+    if not user or not (has_role(user, 'Billing') or has_role(user, 'Admin')):
+        return jsonify({'message': 'Unauthorized access'}), 403
+    
+    try:
+        # Check environment variables
+        mpesa_api_url = os.environ.get('MPESA_API_URL', 'https://sandbox.safaricom.co.ke/mpesa/stkpush/v1/processrequest')
+        business_shortcode = os.environ.get('MPESA_BUSINESS_SHORTCODE', '174379')
+        passkey = os.environ.get('MPESA_PASSKEY', 'your_passkey_here')
+        access_token = os.environ.get('MPESA_ACCESS_TOKEN', 'your_token_here')
+        
+        # Generate timestamp and password for testing
+        timestamp = datetime.now().strftime('%Y%m%d%H%M%S')
+        password = f"{business_shortcode}{passkey}{timestamp}"
+        
+        config_status = {
+            'mpesa_api_url': mpesa_api_url,
+            'business_shortcode': business_shortcode,
+            'passkey_configured': passkey != 'your_passkey_here',
+            'access_token_configured': access_token != 'your_token_here',
+            'timestamp': timestamp,
+            'password_length': len(password),
+            'callback_url': f"{request.host_url}api/payments/mpesa/callback"
+        }
+        
+        return jsonify({
+            'message': 'M-Pesa configuration test',
+            'config': config_status,
+            'status': 'ready' if config_status['passkey_configured'] and config_status['access_token_configured'] else 'needs_configuration'
+        }), 200
+        
+    except Exception as e:
+        logger.error(f"Error testing M-Pesa config: {str(e)}")
+        return jsonify({'message': f'Error testing M-Pesa config: {str(e)}'}), 500
 
 if __name__ == '__main__':
     app.run(debug=True, port=5000)

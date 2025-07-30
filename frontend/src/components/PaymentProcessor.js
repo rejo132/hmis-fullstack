@@ -166,15 +166,37 @@ const PaymentProcessor = ({ invoice, onPaymentComplete, onClose }) => {
       setCheckoutRequestId(response.data.checkout_request_id);
       setMpesaStatus('pending');
       
-      toast.success(response.data.customer_prompt, {
+      // Show appropriate message based on test mode
+      const message = response.data.test_mode 
+        ? 'TEST MODE: M-Pesa payment simulation initiated. No real payment will be processed.'
+        : response.data.customer_prompt;
+      
+      toast.success(message, {
         duration: 6000,
         icon: '📱'
       });
       
       // Show customer instructions
-      toast.success('Customer has been prompted to enter M-Pesa PIN. Waiting for payment confirmation...', {
+      const instructionMessage = response.data.test_mode
+        ? 'TEST MODE: Simulating M-Pesa PIN prompt. Payment will be marked as completed after 5 seconds.'
+        : 'Customer has been prompted to enter M-Pesa PIN. Waiting for payment confirmation...';
+      
+      toast.success(instructionMessage, {
         duration: 8000
       });
+      
+      // If in test mode, simulate payment completion after 5 seconds
+      if (response.data.test_mode) {
+        setTimeout(() => {
+          setMpesaStatus('completed');
+          toast.success('TEST MODE: Payment completed successfully!');
+          onPaymentComplete({
+            method: 'mpesa',
+            amount: getPaymentAmount(),
+            transaction_id: response.data.transaction_id
+          });
+        }, 5000);
+      }
       
     } catch (error) {
       console.error('M-Pesa payment error:', error);
