@@ -18,7 +18,29 @@ jwt = JWTManager(app)
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-CORS(app, resources={r"/api/*": {"origins": "http://localhost:3000,https://hmis-frontend.onrender.com"}}, supports_credentials=True, allow_headers=["Content-Type", "Authorization"], methods=["GET", "POST", "PUT", "DELETE", "OPTIONS"])
+CORS(app, 
+     resources={r"/api/*": {
+         "origins": ["http://localhost:3000", "https://hmis-frontend.onrender.com"],
+         "methods": ["GET", "POST", "PUT", "DELETE", "OPTIONS"],
+         "allow_headers": ["Content-Type", "Authorization", "X-Requested-With", "Accept", "Origin"],
+         "expose_headers": ["Content-Type", "Authorization"],
+         "supports_credentials": True
+     }},
+     origins=["http://localhost:3000", "https://hmis-frontend.onrender.com"],
+     methods=["GET", "POST", "PUT", "DELETE", "OPTIONS"],
+     allow_headers=["Content-Type", "Authorization", "X-Requested-With", "Accept", "Origin"],
+     expose_headers=["Content-Type", "Authorization"],
+     supports_credentials=True
+)
+
+# Add CORS headers to all responses
+@app.after_request
+def after_request(response):
+    response.headers.add('Access-Control-Allow-Origin', 'http://localhost:3000')
+    response.headers.add('Access-Control-Allow-Headers', 'Content-Type,Authorization,X-Requested-With,Accept,Origin')
+    response.headers.add('Access-Control-Allow-Methods', 'GET,POST,PUT,DELETE,OPTIONS')
+    response.headers.add('Access-Control-Allow-Credentials', 'true')
+    return response
 
      # Models
 class User(db.Model):
