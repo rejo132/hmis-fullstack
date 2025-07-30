@@ -21,7 +21,19 @@ const PaymentProcessor = ({ invoice, onPaymentComplete, onClose }) => {
     if (invoice && invoice.total_amount) {
       return parseFloat(invoice.total_amount) || 0;
     }
+    // Fallback to services calculation if total_amount is not available
+    if (invoice && invoice.services && Array.isArray(invoice.services)) {
+      return invoice.services.reduce((sum, service) => sum + (parseFloat(service.amount) || 0), 0);
+    }
     return 0;
+  }, [invoice]);
+
+  const getInvoiceNumber = useCallback(() => {
+    return invoice?.invoice_number || invoice?.invoiceNumber || 'N/A';
+  }, [invoice]);
+
+  const getPatientId = useCallback(() => {
+    return invoice?.patient_id || invoice?.patientId || 'N/A';
   }, [invoice]);
 
   const formatCurrency = useCallback((amount) => {
@@ -230,8 +242,8 @@ const PaymentProcessor = ({ invoice, onPaymentComplete, onClose }) => {
         <div className="bg-gray-50 p-4 rounded-lg mb-4">
           <h3 className="font-semibold mb-2">Invoice Summary</h3>
           <div className="space-y-1 text-sm">
-            <div>Invoice #: {invoice.invoice_number || 'N/A'}</div>
-            <div>Patient ID: {invoice.patient_id || 'N/A'}</div>
+            <div>Invoice #: {getInvoiceNumber()}</div>
+            <div>Patient ID: {getPatientId()}</div>
             <div className="text-lg font-bold">
               Total: {formatCurrency(getPaymentAmount())}
             </div>

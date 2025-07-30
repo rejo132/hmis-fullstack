@@ -139,14 +139,16 @@ const BillingManagement = () => {
       const backendInvoice = response.data;
 
     const invoice = {
-        patientId: selectedVisit.patient_id,
+        id: backendInvoice.id,
+        invoice_number: backendInvoice.invoice_number,
+        patient_id: selectedVisit.patient_id,
+        total_amount: totalAmount,
+        services: services,
+        status: backendInvoice.status,
+        generated_at: backendInvoice.generated_at,
+        // Additional data for display
         patientName: patient.name,
         visitId: selectedVisit.id,
-        services: services,
-        totalAmount: totalAmount,
-        invoiceNumber: backendInvoice.invoice_number,
-        generatedDate: backendInvoice.generated_at,
-        status: backendInvoice.status,
         visitDetails: {
           diagnosis: selectedVisit.diagnosis,
           prescription: selectedVisit.prescription,
@@ -369,11 +371,11 @@ const BillingManagement = () => {
             {generatedInvoice && (
               <div className="p-4 border rounded bg-green-50 mb-4">
                 <div className="font-semibold mb-2">Generated Invoice</div>
-                <div>Invoice Number: {generatedInvoice.invoiceNumber}</div>
+                <div>Invoice Number: {generatedInvoice.invoice_number}</div>
                 <div>Patient: {generatedInvoice.patientName}</div>
-                <div>Total Amount: KES {generatedInvoice.totalAmount.toLocaleString()}</div>
+                <div>Total Amount: KES {generatedInvoice.total_amount.toLocaleString()}</div>
                 <div>Status: {generatedInvoice.status}</div>
-                <div>Generated: {new Date(generatedInvoice.generatedDate).toLocaleDateString()}</div>
+                <div>Generated: {new Date(generatedInvoice.generated_at).toLocaleDateString()}</div>
                 <div className="mt-2">
                   <strong>Services:</strong>
                   <ul className="list-disc list-inside">
