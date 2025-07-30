@@ -4,6 +4,7 @@ import toast from 'react-hot-toast';
 import { processRefund, submitClaim } from '../slices/billingSlice';
 import axios from 'axios';
 import { getBills } from '../api/api';
+import PaymentProcessor from './PaymentProcessor';
 
 const BillingManagement = () => {
   const dispatch = useDispatch();
@@ -22,6 +23,8 @@ const BillingManagement = () => {
   const [reportError, setReportError] = useState(null);
   const [patientVisits, setPatientVisits] = useState([]);
   const [selectedVisit, setSelectedVisit] = useState(null);
+  const [showPaymentModal, setShowPaymentModal] = useState(false);
+  const [selectedInvoice, setSelectedInvoice] = useState(null);
 
   useEffect(() => {
     fetchPatients();
@@ -158,6 +161,19 @@ const BillingManagement = () => {
       console.error('Error generating invoice:', err);
       toast.error('Failed to generate invoice');
     }
+  };
+
+  const handleProcessPayment = (invoice) => {
+    setSelectedInvoice(invoice);
+    setShowPaymentModal(true);
+  };
+
+  const handlePaymentComplete = (paymentResult) => {
+    toast.success(`Payment completed via ${paymentResult.method}`);
+    setShowPaymentModal(false);
+    setSelectedInvoice(null);
+    fetchPatientVisits(); // Refresh visit list
+    setGeneratedInvoice(null); // Clear generated invoice
   };
 
   const handleAcceptPayment = async (paymentMethod) => {
@@ -368,6 +384,14 @@ const BillingManagement = () => {
                     ))}
                   </ul>
                 </div>
+                <div className="mt-4">
+                  <button 
+                    className="btn-primary w-full"
+                    onClick={() => handleProcessPayment(generatedInvoice)}
+                  >
+                    Process Payment
+                  </button>
+                </div>
               </div>
             )}
             {report && (
@@ -465,6 +489,15 @@ const BillingManagement = () => {
           </div>
         </div>
       </div>
+
+      {/* Payment Processor Modal */}
+      {showPaymentModal && selectedInvoice && (
+        <PaymentProcessor
+          invoice={selectedInvoice}
+          onPaymentComplete={handlePaymentComplete}
+          onClose={() => setShowPaymentModal(false)}
+        />
+      )}
     </div>
   );
 };

@@ -7,6 +7,12 @@ from datetime import datetime, timezone, date
 from flask_cors import CORS
 import os
 import logging
+import stripe
+import requests
+import json
+
+# Initialize Stripe
+stripe.api_key = os.environ.get('STRIPE_SECRET_KEY', 'sk_test_your_test_key_here')
 
 app = Flask(__name__)
 app.config.from_object('config.Config')
@@ -2527,6 +2533,487 @@ def pay_invoice(invoice_id):
         logger.error(f"Error paying invoice {invoice_id}: {str(e)}")
         db.session.rollback()
         return jsonify({'message': f'Error paying invoice: {str(e)}'}), 500
+
+class PaymentTransaction(db.Model):
+    __tablename__ = 'payment_transaction'
+    id = db.Column(db.Integer, primary_key=True)
+    invoice_id = db.Column(db.Integer, db.ForeignKey('invoice.id'), nullable=False)
+    patient_id = db.Column(db.Integer, db.ForeignKey('patient.id'), nullable=False)
+    amount = db.Column(db.Numeric(10, 2), nullable=False)
+    currency = db.Column(db.String(3), default='KES')
+    payment_method = db.Column(db.String(50), nullable=False)  # stripe, mpesa, cash, etc.
+    gateway_reference = db.Column(db.String(100))  # External payment gateway reference
+    status = db.Column(db.String(20), default='pending')  # pending, completed, failed, refunded
+    gateway_response = db.Column(db.JSON)  # Store full gateway response
+    processed_by = db.Column(db.Integer, db.ForeignKey('user.id'))
+    created_at = db.Column(db.DateTime, default=lambda: datetime.now(timezone.utc))
+    completed_at = db.Column(db.DateTime)
+
+    def to_dict(self):
+        return {
+            'id': self.id,
+            'invoice_id': self.invoice_id,
+            'patient_id': self.patient_id,
+            'amount': float(self.amount) if self.amount else 0,
+            'currency': self.currency,
+            'payment_method': self.payment_method,
+            'gateway_reference': self.gateway_reference,
+            'status': self.status,
+            'gateway_response': self.gateway_response,
+            'processed_by': self.processed_by,
+            'created_at': self.created_at.isoformat() if self.created_at else None,
+            'completed_at': self.completed_at.isoformat() if self.completed_at else None,
+        }
+
+# Payment API Endpoints
+@app.route('/api/payments/create-intent', methods=['POST'])
+@jwt_required()
+def create_payment_intent():
+    """Create a Stripe payment intent for card payments"""
+    current_user = get_jwt_identity()
+    user = User.query.get(current_user)
+    
+    if not user or not (has_role(user, 'Billing') or has_role(user, 'Admin')):
+        return jsonify({'message': 'Unauthorized access'}), 403
+    
+    data = request.get_json()
+    invoice_id = data.get('invoice_id')
+    amount = data.get('amount')
+    
+    if not invoice_id or not amount:
+        return jsonify({'message': 'Missing invoice_id or amount'}), 400
+    
+    try:
+        invoice = Invoice.query.get(invoice_id)
+        if not invoice:
+            return jsonify({'message': 'Invoice not found'}), 404
+        
+        # Create Stripe payment intent
+        intent = stripe.PaymentIntent.create(
+            amount=int(float(amount) * 100),  # Convert to cents
+            currency='kes',
+            metadata={
+                'invoice_id': invoice_id,
+                'patient_id': invoice.patient_id,
+                'hospital': 'HMIS'
+            }
+        )
+        
+        # Create payment transaction record
+        transaction = PaymentTransaction(
+            invoice_id=invoice_id,
+            patient_id=invoice.patient_id,
+            amount=amount,
+            payment_method='stripe',
+            gateway_reference=intent.id,
+            status='pending',
+            processed_by=current_user
+        )
+        db.session.add(transaction)
+        db.session.commit()
+        
+        return jsonify({
+            'client_secret': intent.client_secret,
+            'transaction_id': transaction.id
+        }), 200
+        
+    except Exception as e:
+        logger.error(f"Error creating payment intent: {str(e)}")
+        return jsonify({'message': f'Error creating payment intent: {str(e)}'}), 500
+
+@app.route('/api/payments/mpesa/initiate', methods=['POST'])
+@jwt_required()
+def initiate_mpesa_payment():
+    """Initiate M-Pesa STK Push payment with customer PIN prompt"""
+    current_user = get_jwt_identity()
+    user = User.query.get(current_user)
+    
+    if not user or not (has_role(user, 'Billing') or has_role(user, 'Admin')):
+        return jsonify({'message': 'Unauthorized access'}), 403
+    
+    data = request.get_json()
+    invoice_id = data.get('invoice_id')
+    phone_number = data.get('phone_number')
+    amount = data.get('amount')
+    
+    if not all([invoice_id, phone_number, amount]):
+        return jsonify({'message': 'Missing required fields'}), 400
+    
+    try:
+        invoice = Invoice.query.get(invoice_id)
+        if not invoice:
+            return jsonify({'message': 'Invoice not found'}), 404
+        
+        # M-Pesa API configuration (Daraja API)
+        mpesa_api_url = os.environ.get('MPESA_API_URL', 'https://sandbox.safaricom.co.ke/mpesa/stkpush/v1/processrequest')
+        business_shortcode = os.environ.get('MPESA_BUSINESS_SHORTCODE', '174379')
+        passkey = os.environ.get('MPESA_PASSKEY', 'your_passkey_here')
+        
+        # Generate timestamp
+        timestamp = datetime.now().strftime('%Y%m%d%H%M%S')
+        password = f"{business_shortcode}{passkey}{timestamp}"
+        
+        # Prepare M-Pesa request with enhanced customer prompt
+        mpesa_data = {
+            "BusinessShortCode": business_shortcode,
+            "Password": password,
+            "Timestamp": timestamp,
+            "TransactionType": "CustomerPayBillOnline",
+            "Amount": int(float(amount)),
+            "PartyA": phone_number,
+            "PartyB": business_shortcode,
+            "PhoneNumber": phone_number,
+            "CallBackURL": f"{request.host_url}api/payments/mpesa/callback",
+            "AccountReference": f"INV-{invoice_id}",
+            "TransactionDesc": f"Hospital Services - Invoice {invoice_id} - Please enter your M-Pesa PIN to complete payment"
+        }
+        
+        # Make M-Pesa API call to Daraja
+        headers = {
+            'Authorization': f'Bearer {os.environ.get("MPESA_ACCESS_TOKEN", "your_token_here")}',
+            'Content-Type': 'application/json'
+        }
+        
+        response = requests.post(mpesa_api_url, json=mpesa_data, headers=headers)
+        response_data = response.json()
+        
+        if response.status_code == 200 and response_data.get('ResponseCode') == '0':
+            # Create payment transaction record
+            transaction = PaymentTransaction(
+                invoice_id=invoice_id,
+                patient_id=invoice.patient_id,
+                amount=amount,
+                payment_method='mpesa',
+                gateway_reference=response_data.get('CheckoutRequestID'),
+                status='pending',
+                processed_by=current_user,
+                gateway_response=response_data
+            )
+            db.session.add(transaction)
+            db.session.commit()
+            
+            # Log the payment initiation
+            audit_log = AuditLog(
+                action=f'M-Pesa payment initiated for invoice {invoice_id} - Customer prompted to enter PIN',
+                user=user.username
+            )
+            db.session.add(audit_log)
+            db.session.commit()
+            
+            return jsonify({
+                'message': 'M-Pesa payment initiated successfully. Customer has been prompted to enter PIN.',
+                'checkout_request_id': response_data.get('CheckoutRequestID'),
+                'transaction_id': transaction.id,
+                'customer_prompt': f'Please check your phone {phone_number} and enter your M-Pesa PIN to complete payment of KES {amount}',
+                'status': 'pending_pin_entry'
+            }), 200
+        else:
+            return jsonify({
+                'message': 'Failed to initiate M-Pesa payment',
+                'error': response_data
+            }), 400
+            
+    except Exception as e:
+        logger.error(f"Error initiating M-Pesa payment: {str(e)}")
+        return jsonify({'message': f'Error initiating M-Pesa payment: {str(e)}'}), 500
+
+@app.route('/api/payments/mpesa/callback', methods=['POST'])
+def mpesa_callback():
+    """Handle M-Pesa payment callback"""
+    try:
+        data = request.get_json()
+        logger.info(f"M-Pesa callback received: {data}")
+        
+        # Extract payment details
+        result_code = data.get('ResultCode')
+        checkout_request_id = data.get('CheckoutRequestID')
+        amount = data.get('Amount')
+        
+        # Find the transaction
+        transaction = PaymentTransaction.query.filter_by(
+            gateway_reference=checkout_request_id
+        ).first()
+        
+        if not transaction:
+            logger.error(f"Transaction not found for checkout_request_id: {checkout_request_id}")
+            return jsonify({'message': 'Transaction not found'}), 404
+        
+        if result_code == '0':  # Success
+            transaction.status = 'completed'
+            transaction.completed_at = datetime.now(timezone.utc)
+            transaction.gateway_response = data
+            
+            # Update invoice status
+            invoice = Invoice.query.get(transaction.invoice_id)
+            if invoice:
+                invoice.status = 'Paid'
+                invoice.paid_at = datetime.now(timezone.utc)
+                invoice.payment_method = 'M-Pesa'
+            
+            db.session.commit()
+            logger.info(f"Payment completed for transaction {transaction.id}")
+        else:
+            transaction.status = 'failed'
+            transaction.gateway_response = data
+            db.session.commit()
+            logger.error(f"Payment failed for transaction {transaction.id}")
+        
+        return jsonify({'message': 'Callback processed successfully'}), 200
+        
+    except Exception as e:
+        logger.error(f"Error processing M-Pesa callback: {str(e)}")
+        return jsonify({'message': f'Error processing callback: {str(e)}'}), 500
+
+@app.route('/api/payments/confirm', methods=['POST'])
+@jwt_required()
+def confirm_payment():
+    """Confirm a payment (for manual confirmations)"""
+    current_user = get_jwt_identity()
+    user = User.query.get(current_user)
+    
+    if not user or not (has_role(user, 'Billing') or has_role(user, 'Admin')):
+        return jsonify({'message': 'Unauthorized access'}), 403
+    
+    data = request.get_json()
+    transaction_id = data.get('transaction_id')
+    payment_method = data.get('payment_method', 'cash')
+    
+    try:
+        transaction = PaymentTransaction.query.get(transaction_id)
+        if not transaction:
+            return jsonify({'message': 'Transaction not found'}), 404
+        
+        transaction.status = 'completed'
+        transaction.completed_at = datetime.now(timezone.utc)
+        transaction.payment_method = payment_method
+        
+        # Update invoice status
+        invoice = Invoice.query.get(transaction.invoice_id)
+        if invoice:
+            invoice.status = 'Paid'
+            invoice.paid_at = datetime.now(timezone.utc)
+            invoice.payment_method = payment_method
+        
+        db.session.commit()
+        
+        audit_log = AuditLog(action=f'Payment confirmed for transaction {transaction_id}', user=user.username)
+        db.session.add(audit_log)
+        db.session.commit()
+        
+        return jsonify({
+            'message': 'Payment confirmed successfully',
+            'transaction': transaction.to_dict()
+        }), 200
+        
+    except Exception as e:
+        logger.error(f"Error confirming payment: {str(e)}")
+        db.session.rollback()
+        return jsonify({'message': f'Error confirming payment: {str(e)}'}), 500
+
+@app.route('/api/payments/transactions', methods=['GET'])
+@jwt_required()
+def get_payment_transactions():
+    """Get payment transactions with filtering"""
+    current_user = get_jwt_identity()
+    user = User.query.get(current_user)
+    
+    if not user or not (has_role(user, 'Billing') or has_role(user, 'Admin')):
+        return jsonify({'message': 'Unauthorized access'}), 403
+    
+    try:
+        page = request.args.get('page', 1, type=int)
+        per_page = 10
+        patient_id = request.args.get('patient_id', type=int)
+        status = request.args.get('status')
+        payment_method = request.args.get('payment_method')
+        
+        query = PaymentTransaction.query
+        
+        if patient_id:
+            query = query.filter_by(patient_id=patient_id)
+        if status:
+            query = query.filter_by(status=status)
+        if payment_method:
+            query = query.filter_by(payment_method=payment_method)
+        
+        transactions = query.order_by(PaymentTransaction.created_at.desc()).paginate(
+            page=page, per_page=per_page, error_out=False
+        )
+        
+        return jsonify({
+            'transactions': [t.to_dict() for t in transactions.items],
+            'total': transactions.total,
+            'pages': transactions.pages,
+            'page': page
+        }), 200
+        
+    except Exception as e:
+        logger.error(f"Error fetching payment transactions: {str(e)}")
+        return jsonify({'message': f'Error fetching transactions: {str(e)}'}), 500
+
+@app.route('/api/payments/refund', methods=['POST'])
+@jwt_required()
+def refund_payment():
+    """Process payment refund"""
+    current_user = get_jwt_identity()
+    user = User.query.get(current_user)
+    
+    if not user or not (has_role(user, 'Billing') or has_role(user, 'Admin')):
+        return jsonify({'message': 'Unauthorized access'}), 403
+    
+    data = request.get_json()
+    transaction_id = data.get('transaction_id')
+    refund_amount = data.get('refund_amount')
+    reason = data.get('reason', 'Refund requested')
+    
+    try:
+        transaction = PaymentTransaction.query.get(transaction_id)
+        if not transaction:
+            return jsonify({'message': 'Transaction not found'}), 404
+        
+        if transaction.status != 'completed':
+            return jsonify({'message': 'Can only refund completed transactions'}), 400
+        
+        # Process refund based on payment method
+        if transaction.payment_method == 'stripe':
+            # Stripe refund
+            refund = stripe.Refund.create(
+                payment_intent=transaction.gateway_reference,
+                amount=int(float(refund_amount) * 100)
+            )
+            gateway_reference = refund.id
+        elif transaction.payment_method == 'mpesa':
+            # M-Pesa refund (implement based on M-Pesa API)
+            gateway_reference = f"refund_{transaction.gateway_reference}"
+        else:
+            # Manual refund
+            gateway_reference = f"manual_refund_{transaction.id}"
+        
+        # Create refund transaction
+        refund_transaction = PaymentTransaction(
+            invoice_id=transaction.invoice_id,
+            patient_id=transaction.patient_id,
+            amount=refund_amount,
+            payment_method=f"{transaction.payment_method}_refund",
+            gateway_reference=gateway_reference,
+            status='completed',
+            processed_by=current_user,
+            gateway_response={'reason': reason, 'original_transaction': transaction.id}
+        )
+        
+        db.session.add(refund_transaction)
+        db.session.commit()
+        
+        audit_log = AuditLog(action=f'Payment refund processed for transaction {transaction_id}', user=user.username)
+        db.session.add(audit_log)
+        db.session.commit()
+        
+        return jsonify({
+            'message': 'Refund processed successfully',
+            'refund_transaction': refund_transaction.to_dict()
+        }), 200
+        
+    except Exception as e:
+        logger.error(f"Error processing refund: {str(e)}")
+        db.session.rollback()
+        return jsonify({'message': f'Error processing refund: {str(e)}'}), 500
+
+@app.route('/api/payments/mpesa/status/<checkout_request_id>', methods=['GET'])
+@jwt_required()
+def check_mpesa_payment_status(checkout_request_id):
+    """Check M-Pesa payment status after customer enters PIN"""
+    current_user = get_jwt_identity()
+    user = User.query.get(current_user)
+    
+    if not user or not (has_role(user, 'Billing') or has_role(user, 'Admin')):
+        return jsonify({'message': 'Unauthorized access'}), 403
+    
+    try:
+        # Find the transaction
+        transaction = PaymentTransaction.query.filter_by(
+            gateway_reference=checkout_request_id
+        ).first()
+        
+        if not transaction:
+            return jsonify({'message': 'Transaction not found'}), 404
+        
+        # Check payment status from Daraja API
+        mpesa_status_url = os.environ.get('MPESA_STATUS_URL', 'https://sandbox.safaricom.co.ke/mpesa/stkpushquery/v1/query')
+        business_shortcode = os.environ.get('MPESA_BUSINESS_SHORTCODE', '174379')
+        passkey = os.environ.get('MPESA_PASSKEY', 'your_passkey_here')
+        
+        timestamp = datetime.now().strftime('%Y%m%d%H%M%S')
+        password = f"{business_shortcode}{passkey}{timestamp}"
+        
+        status_data = {
+            "BusinessShortCode": business_shortcode,
+            "Password": password,
+            "Timestamp": timestamp,
+            "CheckoutRequestID": checkout_request_id
+        }
+        
+        headers = {
+            'Authorization': f'Bearer {os.environ.get("MPESA_ACCESS_TOKEN", "your_token_here")}',
+            'Content-Type': 'application/json'
+        }
+        
+        response = requests.post(mpesa_status_url, json=status_data, headers=headers)
+        status_response = response.json()
+        
+        if response.status_code == 200:
+            result_code = status_response.get('ResultCode')
+            if result_code == '0':
+                # Payment successful
+                transaction.status = 'completed'
+                transaction.completed_at = datetime.now(timezone.utc)
+                transaction.gateway_response = status_response
+                
+                # Update invoice status
+                invoice = Invoice.query.get(transaction.invoice_id)
+                if invoice:
+                    invoice.status = 'Paid'
+                    invoice.paid_at = datetime.now(timezone.utc)
+                    invoice.payment_method = 'M-Pesa'
+                
+                db.session.commit()
+                
+                audit_log = AuditLog(
+                    action=f'M-Pesa payment completed for invoice {transaction.invoice_id}',
+                    user=user.username
+                )
+                db.session.add(audit_log)
+                db.session.commit()
+                
+                return jsonify({
+                    'status': 'completed',
+                    'message': 'Payment completed successfully',
+                    'transaction': transaction.to_dict()
+                }), 200
+            elif result_code == '1':
+                return jsonify({
+                    'status': 'pending',
+                    'message': 'Customer has not entered PIN yet. Please wait...'
+                }), 200
+            else:
+                transaction.status = 'failed'
+                transaction.gateway_response = status_response
+                db.session.commit()
+                
+                return jsonify({
+                    'status': 'failed',
+                    'message': 'Payment failed or was cancelled',
+                    'error': status_response.get('ResultDesc', 'Unknown error')
+                }), 200
+        else:
+            return jsonify({
+                'status': 'error',
+                'message': 'Failed to check payment status',
+                'error': status_response
+            }), 400
+            
+    except Exception as e:
+        logger.error(f"Error checking M-Pesa payment status: {str(e)}")
+        return jsonify({'message': f'Error checking payment status: {str(e)}'}), 500
 
 if __name__ == '__main__':
     app.run(debug=True, port=5000)
